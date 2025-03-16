@@ -1,0 +1,561 @@
+#[cfg(test)]
+mod tests {
+    use cosmwasm_std::{Addr, Uint128, testing::{mock_dependencies, mock_env, mock_info}, from_binary};
+    use crate::{contract::{instantiate, execute, query}, msg::{InstantiateMsg, ExecuteMsg, QueryMsg, ConfigResponse, ClaimResponse, OrganizationResponse, TotalCarbonCreditsResponse, ClaimsResponse}, state::{VoteOption, ClaimStatus}};
+
+    #[test]
+    fn proper_initialization() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+        let info = mock_info("creator", &[]);
+        
+        let msg = InstantiateMsg {
+            voting_period: 86400, // 1 day
+        };
+        
+        let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
+        assert_eq!(0, res.messages.len());
+        
+        // Query the config
+        let config_query = QueryMsg::GetConfig {};
+        let config_res: ConfigResponse = from_binary(&query(deps.as_ref(), mock_env(), config_query).unwrap()).unwrap();
+        assert_eq!(config_res.owner, Addr::unchecked("creator"));
+        assert_eq!(config_res.voting_period, 86400);
+        assert_eq!(config_res.total_carbon_credits, Uint128::zero());
+    }
+    
+    #[test]
+    fn create_claim_works() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+        let info = mock_info("creator", &[]);
+        
+        // Instantiate the contract
+        let msg = InstantiateMsg {
+            voting_period: 86400, // 1 day
+        };
+        instantiate(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+        
+        // Create a claim
+        let create_claim_msg = ExecuteMsg::CreateClaim {
+            longitudes: vec!["123.456".to_string()],
+            latitudes: vec!["78.90".to_string()],
+            time_started: 1000,
+            time_ended: 2000,
+            demanded_tokens: Uint128::new(100),
+            ipfs_hashes: vec!["QmHash1".to_string()],
+        };
+        
+        let res = execute(deps.as_mut(), env.clone(), info, create_claim_msg).unwrap();
+        assert_eq!(4, res.attributes.len());
+        
+        // Query the claim
+        let claim_query = QueryMsg::GetClaim { id: 0 };
+        let claim_res: ClaimResponse = from_binary(&query(deps.as_ref(), env.clone(), claim_query).unwrap()).unwrap();
+        
+        assert_eq!(claim_res.id, 0);
+        assert_eq!(claim_res.organization, Addr::unchecked("creator"));
+        assert_eq!(claim_res.demanded_tokens, Uint128::new(100));
+        assert_eq!(claim_res.status, ClaimStatus::Active);
+        assert_eq!(claim_res.yes_votes, Uint128::zero());
+        assert_eq!(claim_res.no_votes, Uint128::zero());
+    }
+    
+    #[test]
+    fn voting_works() {
+        let mut deps = mock_dependencies();
+        let mut env = mock_env();
+        let info = mock_info("creator", &[]);
+        
+        // Instantiate the contract
+        let msg = InstantiateMsg {
+            voting_period: 86400, // 1 day
+        };
+        instantiate(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+        
+        // Create a claim
+        let create_claim_msg = ExecuteMsg::CreateClaim {
+            longitudes: vec!["123.456".to_string()],
+            latitudes: vec!["78.90".to_string()],
+            time_started: 1000,
+            time_ended: 2000,
+            demanded_tokens: Uint128::new(100),
+            ipfs_hashes: vec!["QmHash1".to_string()],
+        };
+        
+        execute(deps.as_mut(), env.clone(), info, create_claim_msg).unwrap();
+        
+        // Cast votes
+        let voter1_info = mock_info("voter1", &[]);
+        let vote1_msg = ExecuteMsg::CastVote {
+            claim_id: 0,
+            vote: VoteOption::Yes,
+        };
+        execute(deps.as_mut(), env.clone(), voter1_info, vote1_msg).unwrap();
+        
+        let voter2_info = mock_info("voter2", &[]);
+        let vote2_msg = ExecuteMsg::CastVote {
+            claim_id: 0,
+            vote: VoteOption::No,
+        };
+        execute(deps.as_mut(), env.clone(), voter2_info, vote2_msg).unwrap();
+        
+        let voter3_info = mock_info("voter3", &[]);
+        let vote3_msg = ExecuteMsg::CastVote {
+            claim_id: 0,
+            vote: VoteOption::Yes,
+        };
+        execute(deps.as_mut(), env.clone(), voter3_info, vote3_msg).unwrap();
+        
+        // Query the claim to check votes
+        let claim_query = QueryMsg::GetClaim { id: 0 };
+        let claim_res: ClaimResponse = from_binary(&query(deps.as_ref(), env.clone(), claim_query).unwrap()).unwrap();
+        
+        assert_eq!(claim_res.yes_votes, Uint128::new(2));
+        assert_eq!(claim_res.no_votes, Uint128::new(1));
+        
+        // Fast forward time to end voting period
+        env.block.time = env.block.time.plus_seconds(86401);
+        
+        // Finalize voting
+        let finalize_msg = ExecuteMsg::FinalizeVoting {
+            claim_id: 0,
+        };
+        let finalize_info = mock_info("anyone", &[]);
+        execute(deps.as_mut(), env.clone(), finalize_info, finalize_msg).unwrap();
+        
+        // Query the claim again
+        let claim_query = QueryMsg::GetClaim { id: 0 };
+        let claim_res: ClaimResponse = from_binary(&query(deps.as_ref(), env.clone(), claim_query).unwrap()).unwrap();
+        
+        assert_eq!(claim_res.status, ClaimStatus::Approved);
+        
+        // Check that total carbon credits were updated
+        let total_query = QueryMsg::GetTotalCarbonCredits {};
+        let total_res: TotalCarbonCreditsResponse = from_binary(&query(deps.as_ref(), env.clone(), total_query).unwrap()).unwrap();
+        
+        assert_eq!(total_res.total, Uint128::new(100));
+        
+        // Check that organization received carbon credits
+        let org_query = QueryMsg::GetOrganization { address: Addr::unchecked("creator") };
+        let org_res: OrganizationResponse = from_binary(&query(deps.as_ref(), env.clone(), org_query).unwrap()).unwrap();
+        
+        assert_eq!(org_res.carbon_credits, Uint128::new(100));
+        
+        // Check that voters who voted correctly got reputation boost
+        let voter1_query = QueryMsg::GetOrganization { address: Addr::unchecked("voter1") };
+        let voter1_res: OrganizationResponse = from_binary(&query(deps.as_ref(), env.clone(), voter1_query).unwrap()).unwrap();
+        
+        assert_eq!(voter1_res.reputation_score, Uint128::new(1));
+        
+        let voter2_query = QueryMsg::GetOrganization { address: Addr::unchecked("voter2") };
+        let voter2_res: OrganizationResponse = from_binary(&query(deps.as_ref(), env.clone(), voter2_query).unwrap()).unwrap();
+        
+        assert_eq!(voter2_res.reputation_score, Uint128::zero());
+    }
+    
+    #[test]
+    fn lending_works() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+        
+        // Instantiate the contract
+        let creator_info = mock_info("creator", &[]);
+        let msg = InstantiateMsg {
+            voting_period: 86400, // 1 day
+        };
+        instantiate(deps.as_mut(), env.clone(), creator_info.clone(), msg).unwrap();
+        
+        // Create and approve a claim to get some carbon credits
+        let create_claim_msg = ExecuteMsg::CreateClaim {
+            longitudes: vec!["123.456".to_string()],
+            latitudes: vec!["78.90".to_string()],
+            time_started: 1000,
+            time_ended: 2000,
+            demanded_tokens: Uint128::new(100),
+            ipfs_hashes: vec!["QmHash1".to_string()],
+        };
+        
+        execute(deps.as_mut(), env.clone(), creator_info.clone(), create_claim_msg).unwrap();
+        
+        // Cast a vote (yes)
+        let voter_info = mock_info("voter", &[]);
+        let vote_msg = ExecuteMsg::CastVote {
+            claim_id: 0,
+            vote: VoteOption::Yes,
+        };
+        execute(deps.as_mut(), env.clone(), voter_info, vote_msg).unwrap();
+        
+        // Fast forward time and finalize voting
+        let mut env2 = env.clone();
+        env2.block.time = env.block.time.plus_seconds(86401);
+        
+        let finalize_msg = ExecuteMsg::FinalizeVoting {
+            claim_id: 0,
+        };
+        execute(deps.as_mut(), env2.clone(), creator_info.clone(), finalize_msg).unwrap();
+        
+        // Now the creator has 100 carbon credits
+        // Try lending tokens
+        let lend_msg = ExecuteMsg::LendTokens {
+            borrower: Addr::unchecked("borrower"),
+            amount: Uint128::new(50),
+        };
+        execute(deps.as_mut(), env2.clone(), creator_info.clone(), lend_msg).unwrap();
+        
+        // Check creator's balance
+        let creator_query = QueryMsg::GetOrganization { address: Addr::unchecked("creator") };
+        let creator_res: OrganizationResponse = from_binary(&query(deps.as_ref(), env2.clone(), creator_query).unwrap()).unwrap();
+        
+        assert_eq!(creator_res.carbon_credits, Uint128::new(50));
+        
+        // Check borrower's balance and debt
+        let borrower_query = QueryMsg::GetOrganization { address: Addr::unchecked("borrower") };
+        let borrower_res: OrganizationResponse = from_binary(&query(deps.as_ref(), env2.clone(), borrower_query).unwrap()).unwrap();
+        
+        assert_eq!(borrower_res.carbon_credits, Uint128::new(50));
+        assert_eq!(borrower_res.debt, Uint128::new(50));
+        assert_eq!(borrower_res.times_borrowed, 1);
+        assert_eq!(borrower_res.total_borrowed, Uint128::new(50));
+        
+        // Try repaying tokens
+        let borrower_info = mock_info("borrower", &[]);
+        let repay_msg = ExecuteMsg::RepayTokens {
+            lender: Addr::unchecked("creator"),
+            amount: Uint128::new(30),
+        };
+        execute(deps.as_mut(), env2.clone(), borrower_info, repay_msg).unwrap();
+        
+        // Check updated balances
+        let creator_query = QueryMsg::GetOrganization { address: Addr::unchecked("creator") };
+        let creator_res: OrganizationResponse = from_binary(&query(deps.as_ref(), env2.clone(), creator_query).unwrap()).unwrap();
+        
+        assert_eq!(creator_res.carbon_credits, Uint128::new(80));
+        
+        let borrower_query = QueryMsg::GetOrganization { address: Addr::unchecked("borrower") };
+        let borrower_res: OrganizationResponse = from_binary(&query(deps.as_ref(), env2.clone(), borrower_query).unwrap()).unwrap();
+        
+        assert_eq!(borrower_res.carbon_credits, Uint128::new(20));
+        assert_eq!(borrower_res.debt, Uint128::new(20));
+        assert_eq!(borrower_res.total_returned, Uint128::new(30));
+    }
+    
+    // #[test]
+    // fn zk_verification_works() {
+    //     let mut deps = mock_dependencies();
+    //     let env = mock_env();
+        
+    //     // Instantiate the contract
+    //     let creator_info = mock_info("creator", &[]);
+    //     let msg = InstantiateMsg {
+    //         voting_period: 86400, // 1 day
+    //     };
+    //     instantiate(deps.as_mut(), env.clone(), creator_info.clone(), msg).unwrap();
+        
+    //     // Set up an organization with some data
+    //     let create_claim_msg = ExecuteMsg::CreateClaim {
+    //         longitudes: vec!["123.456".to_string()],
+    //         latitudes: vec!["78.90".to_string()],
+    //         time_started: 1000,
+    //         time_ended: 2000,
+    //         demanded_tokens: Uint128::new(100),
+    //         ipfs_hashes: vec!["QmHash1".to_string()],
+    //     };
+        
+    //     execute(deps.as_mut(), env.clone(), creator_info.clone(), create_claim_msg).unwrap();
+        
+    //     // Vote, finalize, etc. (as in previous test)
+    //     let voter_info = mock_info("voter", &[]);
+    //     let vote_msg = ExecuteMsg::CastVote {
+    //         claim_id: 0,
+    //         vote: VoteOption::Yes,
+    //     };
+    //     execute(deps.as_mut(), env.clone(), voter_info, vote_msg).unwrap();
+        
+    //     let mut env2 = env.clone();
+    //     env2.block.time = env.block.time.plus_seconds(86401);
+        
+    //     let finalize_msg = ExecuteMsg::FinalizeVoting {
+    //         claim_id: 0,
+    //     };
+    //     execute(deps.as_mut(), env2.clone(), creator_info.clone(), finalize_msg).unwrap();
+        
+    //     // Verify eligibility with valid proof
+    //     let verify_msg = ExecuteMsg::VerifyEligibility {
+    //         borrower: Addr::unchecked("creator"),
+    //         amount: Uint128::new(50),
+    //         proof: "valid_proof".to_string(),
+    //     };
+        
+    //     let verifier_info = mock_info("verifier", &[]);
+    //     let result = execute(deps.as_mut(), env2.clone(), verifier_info.clone(), verify_msg).unwrap();
+        
+    //     // Check that verification succeeded
+    //     assert_eq!(result.attributes.len(), 4);
+    //     assert_eq!(result.attributes[3].value, "true");
+        
+    //     // Try with invalid proof
+    //     let invalid_verify_msg = ExecuteMsg::VerifyEligibility {
+    //         borrower: Addr::unchecked("creator"),
+    //         amount: Uint128::new(50),
+    //         proof: "invalid_proof".to_string(),
+    //     };
+        
+    //     let result = execute(deps.as_mut(), env2.clone(), verifier_info, invalid_verify_msg).unwrap();
+        
+    //     // Check that verification failed but didn't error
+    //     assert_eq!(result.attributes.len(), 4);
+    //     assert_eq!(result.attributes[3].value, "false");
+    // }
+    
+    #[test]
+    fn query_claims_works() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+        
+        // Instantiate the contract
+        let creator_info = mock_info("creator", &[]);
+        let msg = InstantiateMsg {
+            voting_period: 86400, // 1 day
+        };
+        instantiate(deps.as_mut(), env.clone(), creator_info.clone(), msg).unwrap();
+        
+        // Create multiple claims
+        for i in 0..3 {
+            let create_claim_msg = ExecuteMsg::CreateClaim {
+                longitudes: vec![format!("123.{}", i)],
+                latitudes: vec![format!("78.{}", i)],
+                time_started: 1000 + i,
+                time_ended: 2000 + i,
+                demanded_tokens: Uint128::new(100 + i as u128),
+                ipfs_hashes: vec![format!("QmHash{}", i)],
+            };
+            
+            execute(deps.as_mut(), env.clone(), creator_info.clone(), create_claim_msg).unwrap();
+        }
+        
+        // Query all claims
+        let claims_query = QueryMsg::GetClaims { start_after: None, limit: None };
+        let claims_res: ClaimsResponse = from_binary(&query(deps.as_ref(), env.clone(), claims_query).unwrap()).unwrap();
+        
+        assert_eq!(claims_res.claims.len(), 3);
+        assert_eq!(claims_res.claims[0].id, 0);
+        assert_eq!(claims_res.claims[1].id, 1);
+        assert_eq!(claims_res.claims[2].id, 2);
+        
+        // Query with pagination
+        let paginated_query = QueryMsg::GetClaims { start_after: Some(1), limit: Some(1) };
+        let paginated_res: ClaimsResponse = from_binary(&query(deps.as_ref(), env.clone(), paginated_query).unwrap()).unwrap();
+        
+        assert_eq!(paginated_res.claims.len(), 1);
+        assert_eq!(paginated_res.claims[0].id, 2);
+        
+        // Approve one claim
+        let vote_msg = ExecuteMsg::CastVote {
+            claim_id: 1,
+            vote: VoteOption::Yes,
+        };
+        execute(deps.as_mut(), env.clone(), creator_info.clone(), vote_msg).unwrap();
+        
+        let mut env2 = env.clone();
+        env2.block.time = env.block.time.plus_seconds(86401);
+        
+        let finalize_msg = ExecuteMsg::FinalizeVoting {
+            claim_id: 1,
+        };
+        execute(deps.as_mut(), env2.clone(), creator_info, finalize_msg).unwrap();
+        
+        // Query by status
+        let status_query = QueryMsg::GetClaimsByStatus { status: ClaimStatus::Approved, start_after: None, limit: None };
+        let status_res: ClaimsResponse = from_binary(&query(deps.as_ref(), env2.clone(), status_query).unwrap()).unwrap();
+        
+        assert_eq!(status_res.claims.len(), 1);
+        assert_eq!(status_res.claims[0].id, 1);
+        assert_eq!(status_res.claims[0].status, ClaimStatus::Approved);
+        
+        let active_query = QueryMsg::GetClaimsByStatus { status: ClaimStatus::Active, start_after: None, limit: None };
+        let active_res: ClaimsResponse = from_binary(&query(deps.as_ref(), env2, active_query).unwrap()).unwrap();
+        
+        assert_eq!(active_res.claims.len(), 2);
+        assert!(active_res.claims.iter().all(|c| c.status == ClaimStatus::Active));
+    }
+    #[test]
+fn test_double_voting_prevention() {
+    let mut deps = mock_dependencies();
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
+
+    // Instantiate the contract
+    let msg = InstantiateMsg {
+        voting_period: 86400, // 1 day
+    };
+    instantiate(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+
+    // Create a claim
+    let create_claim_msg = ExecuteMsg::CreateClaim {
+        longitudes: vec!["123.456".to_string()],
+        latitudes: vec!["78.90".to_string()],
+        time_started: 1000,
+        time_ended: 2000,
+        demanded_tokens: Uint128::new(100),
+        ipfs_hashes: vec!["QmHash1".to_string()],
+    };
+    execute(deps.as_mut(), env.clone(), info.clone(), create_claim_msg).unwrap();
+
+    // Cast a vote (Yes)
+    let voter_info = mock_info("voter1", &[]);
+    let vote_msg = ExecuteMsg::CastVote {
+        claim_id: 0,
+        vote: VoteOption::Yes,
+    };
+    execute(deps.as_mut(), env.clone(), voter_info.clone(), vote_msg).unwrap();
+
+    // Try to vote again (should fail)
+    let vote_msg = ExecuteMsg::CastVote {
+        claim_id: 0,
+        vote: VoteOption::Yes,
+    };
+    let res = execute(deps.as_mut(), env.clone(), voter_info, vote_msg);
+    assert!(res.is_err()); // Should fail because the voter already voted
+}
+
+#[test]
+fn test_voting_period_enforcement() {
+    let mut deps = mock_dependencies();
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
+
+    // Instantiate the contract
+    let msg = InstantiateMsg {
+        voting_period: 86400, // 1 day
+    };
+    instantiate(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+
+    // Create a claim
+    let create_claim_msg = ExecuteMsg::CreateClaim {
+        longitudes: vec!["123.456".to_string()],
+        latitudes: vec!["78.90".to_string()],
+        time_started: 1000,
+        time_ended: 2000,
+        demanded_tokens: Uint128::new(100),
+        ipfs_hashes: vec!["QmHash1".to_string()],
+    };
+    execute(deps.as_mut(), env.clone(), info.clone(), create_claim_msg).unwrap();
+
+    // Try to finalize voting before the voting period ends (should fail)
+    let finalize_msg = ExecuteMsg::FinalizeVoting { claim_id: 0 };
+    let res = execute(deps.as_mut(), env.clone(), info.clone(), finalize_msg);
+    assert!(res.is_err()); // Should fail because the voting period has not ended
+}
+
+#[test]
+fn test_reputation_boost_for_correct_voters() {
+    let mut deps = mock_dependencies();
+    let mut env = mock_env();
+    let info = mock_info("creator", &[]);
+
+    // Instantiate the contract
+    let msg = InstantiateMsg {
+        voting_period: 86400, // 1 day
+    };
+    instantiate(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+
+    // Create a claim
+    let create_claim_msg = ExecuteMsg::CreateClaim {
+        longitudes: vec!["123.456".to_string()],
+        latitudes: vec!["78.90".to_string()],
+        time_started: 1000,
+        time_ended: 2000,
+        demanded_tokens: Uint128::new(100),
+        ipfs_hashes: vec!["QmHash1".to_string()],
+    };
+    execute(deps.as_mut(), env.clone(), info.clone(), create_claim_msg).unwrap();
+
+    // Cast votes
+    let voter1_info = mock_info("voter1", &[]);
+    let vote1_msg = ExecuteMsg::CastVote {
+        claim_id: 0,
+        vote: VoteOption::Yes,
+    };
+    execute(deps.as_mut(), env.clone(), voter1_info.clone(), vote1_msg).unwrap();
+
+    let voter2_info = mock_info("voter2", &[]);
+    let vote2_msg = ExecuteMsg::CastVote {
+        claim_id: 0,
+        vote: VoteOption::No,
+    };
+    execute(deps.as_mut(), env.clone(), voter2_info.clone(), vote2_msg).unwrap();
+
+    // Fast forward time to end voting period
+    env.block.time = env.block.time.plus_seconds(86401);
+
+    // Finalize voting
+    let finalize_msg = ExecuteMsg::FinalizeVoting { claim_id: 0 };
+    execute(deps.as_mut(), env.clone(), info.clone(), finalize_msg).unwrap();
+
+    // Check reputation scores
+    let voter1_query = QueryMsg::GetOrganization { address: Addr::unchecked("voter1") };
+    let voter1_res: OrganizationResponse = from_binary(&query(deps.as_ref(), env.clone(), voter1_query).unwrap()).unwrap();
+    assert_eq!(voter1_res.reputation_score, Uint128::new(1)); // Voted correctly
+
+    let voter2_query = QueryMsg::GetOrganization { address: Addr::unchecked("voter2") };
+    let voter2_res: OrganizationResponse = from_binary(&query(deps.as_ref(), env.clone(), voter2_query).unwrap()).unwrap();
+    assert_eq!(voter2_res.reputation_score, Uint128::zero()); // Voted incorrectly
+}
+
+#[test]
+fn test_lending_edge_cases() {
+    let mut deps = mock_dependencies();
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
+
+    // Instantiate the contract
+    let msg = InstantiateMsg {
+        voting_period: 86400, // 1 day
+    };
+    instantiate(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+
+    // Create a claim and approve it to get carbon credits
+    let create_claim_msg = ExecuteMsg::CreateClaim {
+        longitudes: vec!["123.456".to_string()],
+        latitudes: vec!["78.90".to_string()],
+        time_started: 1000,
+        time_ended: 2000,
+        demanded_tokens: Uint128::new(100),
+        ipfs_hashes: vec!["QmHash1".to_string()],
+    };
+    execute(deps.as_mut(), env.clone(), info.clone(), create_claim_msg).unwrap();
+
+    // Cast a vote (Yes)
+    let voter_info = mock_info("voter", &[]);
+    let vote_msg = ExecuteMsg::CastVote {
+        claim_id: 0,
+        vote: VoteOption::Yes,
+    };
+    execute(deps.as_mut(), env.clone(), voter_info, vote_msg).unwrap();
+
+    // Fast forward time and finalize voting
+    let mut env2 = env.clone();
+    env2.block.time = env.block.time.plus_seconds(86401);
+
+    let finalize_msg = ExecuteMsg::FinalizeVoting { claim_id: 0 };
+    execute(deps.as_mut(), env2.clone(), info.clone(), finalize_msg).unwrap();
+
+    // Try lending more tokens than available (should fail)
+    let lend_msg = ExecuteMsg::LendTokens {
+        borrower: Addr::unchecked("borrower"),
+        amount: Uint128::new(150),
+    };
+    let res = execute(deps.as_mut(), env2.clone(), info.clone(), lend_msg);
+    assert!(res.is_err()); // Should fail because the lender doesn't have enough credits
+
+    // Try repaying more than the debt (should fail)
+    let borrower_info = mock_info("borrower", &[]);
+    let repay_msg = ExecuteMsg::RepayTokens {
+        lender: Addr::unchecked("creator"),
+        amount: Uint128::new(150),
+    };
+    let res = execute(deps.as_mut(), env2.clone(), borrower_info, repay_msg);
+    assert!(res.is_err()); // Should fail because the borrower doesn't have enough debt
+}
+}
