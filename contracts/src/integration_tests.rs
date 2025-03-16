@@ -1,8 +1,14 @@
 #[cfg(test)]
+
 mod tests {
     use cosmwasm_std::{Addr, Uint128, testing::{mock_dependencies, mock_env, mock_info}, from_binary};
     use crate::{contract::{instantiate, execute, query}, msg::{InstantiateMsg, ExecuteMsg, QueryMsg, ConfigResponse, ClaimResponse,OrganizationsResponse,OrganizationResponse, TotalCarbonCreditsResponse, ClaimsResponse}, state::{VoteOption, ClaimStatus}};
     use cosmwasm_std::coins;
+    use crate::state::ORGANIZATIONS;
+    use crate::contract::add_organization_emission;
+    use crate::ContractError;
+    use cosmwasm_std::OverflowError;
+
     #[test]
     fn proper_initialization() {
         let mut deps = mock_dependencies();
@@ -610,5 +616,8 @@ mod tests {
         assert_eq!(page3.organizations[0].address, Addr::unchecked("org4"));
         assert_eq!(page3.organizations[1].address, Addr::unchecked("org5"));
     }
+
+    
+   
     
 }

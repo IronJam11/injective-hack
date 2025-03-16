@@ -55,6 +55,7 @@ pub struct OrganizationInfo {
     pub total_borrowed: Uint128,
     pub total_returned: Uint128,
     pub name: String,
+    pub emissions: Uint128,
 }
 
 pub const CONFIG: Item<Config> = Item::new("config");

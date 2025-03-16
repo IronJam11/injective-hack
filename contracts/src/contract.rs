@@ -1,12 +1,11 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
+use std::str::FromStr;
 use cosmwasm_std::{to_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult, Uint128, Addr};
 use cw_storage_plus::Bound;
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg, ConfigResponse, ClaimResponse, OrganizationResponse, TotalCarbonCreditsResponse, ClaimsResponse, OrganizationListItem,OrganizationsResponse};
 use crate::state::{Config, CONFIG, CLAIMS, VOTES, CLAIM_COUNTER, ORGANIZATIONS, Claim, ClaimStatus, OrganizationInfo, VoteOption};
-
-// Helper function to verify ZK proofs
 use crate::helpers::verify_zk_proof;
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -58,6 +57,9 @@ pub fn execute(
         },
         ExecuteMsg::UpdateOrganizationName { name } => {
             execute_update_organization_name(deps, env, info, name)
+        },
+        ExecuteMsg::AddOrganizationEmission { emissions } => {
+            add_organization_emission(deps, env, info, emissions) // Add this handler
         }
     }
 }
@@ -177,6 +179,7 @@ pub fn execute_finalize_voting(
                 total_borrowed: Uint128::zero(),
                 total_returned: Uint128::zero(),
                 name: "".to_string(),
+                emissions: Uint128::zero(),
             });
         
         org_info.carbon_credits += claim.demanded_tokens;
@@ -208,6 +211,7 @@ pub fn execute_finalize_voting(
                     total_borrowed: Uint128::zero(),
                     total_returned: Uint128::zero(),
                     name: "".to_string(),
+                    emissions: Uint128::zero(),
                 });
             
             // Increase reputation score for correct voters
@@ -241,6 +245,7 @@ pub fn execute_lend_tokens(
             total_borrowed: Uint128::zero(),
             total_returned: Uint128::zero(),
             name: "".to_string(),
+            emissions: Uint128::zero(),
         });
     
     let mut borrower_info = ORGANIZATIONS.may_load(deps.storage, &borrower)?
@@ -252,6 +257,7 @@ pub fn execute_lend_tokens(
             total_borrowed: Uint128::zero(),
             total_returned: Uint128::zero(),
             name: "".to_string(),
+            emissions: Uint128::zero(),
         });
     
     // Check if lender has enough carbon credits
@@ -296,6 +302,7 @@ pub fn execute_repay_tokens(
             total_borrowed: Uint128::zero(),
             total_returned: Uint128::zero(),
             name: "".to_string(),
+            emissions: Uint128::zero(),
         });
     
     let mut lender_info = ORGANIZATIONS.may_load(deps.storage, &lender)?
@@ -307,6 +314,7 @@ pub fn execute_repay_tokens(
             total_borrowed: Uint128::zero(),
             total_returned: Uint128::zero(),
             name: "".to_string(),
+            emissions: Uint128::zero(),
         });
     
     // Check if borrower has enough carbon credits
@@ -355,6 +363,7 @@ pub fn execute_verify_eligibility(
             total_borrowed: Uint128::zero(),
             total_returned: Uint128::zero(),
             name: "".to_string(),
+            emissions: Uint128::zero(),
         });
     
     // Verify the ZK proof
@@ -388,7 +397,6 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::GetTotalCarbonCredits {} => to_binary(&query_total_carbon_credits(deps)?),
         QueryMsg::GetClaims { start_after, limit } => to_binary(&query_claims(deps, start_after, limit)?),
         QueryMsg::GetClaimsByStatus { status, start_after, limit } => to_binary(&query_claims_by_status(deps, status, start_after, limit)?),
-        // QueryMsg::GetAllOrganizations { start_after, limit } => to_binary(&query_all_organizations(deps, start_after, limit)?),
         QueryMsg::GetAllOrganizations { start_after, limit } => to_binary(&query_all_organizations(deps, start_after, limit)?),
     }
 
@@ -431,6 +439,7 @@ fn query_organization(deps: Deps, address: Addr) -> StdResult<OrganizationRespon
             total_borrowed: Uint128::zero(),
             total_returned: Uint128::zero(),
             name: "".to_string(),
+            emissions: Uint128::zero(),
         });
     
     Ok(OrganizationResponse {
@@ -441,6 +450,8 @@ fn query_organization(deps: Deps, address: Addr) -> StdResult<OrganizationRespon
         times_borrowed: org_info.times_borrowed,
         total_borrowed: org_info.total_borrowed,
         total_returned: org_info.total_returned,
+        name: org_info.name,
+        emissions: org_info.emissions,
     })
 }
 
@@ -530,6 +541,7 @@ pub fn execute_update_organization_name(
             total_borrowed: Uint128::zero(),
             total_returned: Uint128::zero(),
             name: "".to_string(),
+            emissions: Uint128::zero(),
         });
     
     // Update organization name
@@ -567,4 +579,38 @@ fn query_all_organizations(deps: Deps, start_after: Option<Addr>, limit: Option<
     
     Ok(OrganizationsResponse { organizations })
     
+}
+pub fn add_organization_emission(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    emissions: String,
+) -> Result<Response, ContractError> {
+    // Load organization info
+    let mut org_info = ORGANIZATIONS.may_load(deps.storage, &info.sender)?
+        .unwrap_or(OrganizationInfo {
+            reputation_score: Uint128::zero(),
+            carbon_credits: Uint128::zero(),
+            debt: Uint128::zero(),
+            times_borrowed: 0,
+            total_borrowed: Uint128::zero(),
+            total_returned: Uint128::zero(),
+            name: "".to_string(),
+            emissions: Uint128::zero(),
+        });
+
+    // Parse the new emissions value
+    let new_emissions = Uint128::from_str(&emissions)?;
+
+    // Add the new emissions to the existing emissions
+    // This will now work because we've implemented From<OverflowError> for ContractError
+    org_info.emissions = org_info.emissions.checked_add(new_emissions)?;
+
+    // Save updated organization info
+    ORGANIZATIONS.save(deps.storage, &info.sender, &org_info)?;
+
+    Ok(Response::new()
+        .add_attribute("method", "add_organization_emission")
+        .add_attribute("organization", info.sender)
+        .add_attribute("emissions_added", emissions))
 }

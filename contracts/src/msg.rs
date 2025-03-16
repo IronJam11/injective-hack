@@ -13,6 +13,7 @@ pub struct InstantiateMsg {
 #[serde(rename_all = "snake_case")]
 pub enum ExecuteMsg {
     UpdateOrganizationName { name: String },
+    AddOrganizationEmission { emissions: String },
     CreateClaim {
         longitudes: Vec<String>,
         latitudes: Vec<String>,
@@ -100,6 +101,8 @@ pub struct OrganizationResponse {
     pub times_borrowed: u32,
     pub total_borrowed: Uint128,
     pub total_returned: Uint128,
+    pub name: String,
+    pub emissions: Uint128,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]

@@ -1,5 +1,6 @@
 use cosmwasm_std::StdError;
 use thiserror::Error;
+use cosmwasm_std::OverflowError;
 
 #[derive(Error, Debug, PartialEq)]
 pub enum ContractError {
@@ -32,4 +33,7 @@ pub enum ContractError {
 
     #[error("Borrower not eligible")]
     BorrowerNotEligible {},
+
+    #[error("Overflow: {0}")]
+    Overflow(#[from] OverflowError),
 }
