@@ -12,6 +12,7 @@ pub struct InstantiateMsg {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecuteMsg {
+    UpdateOrganizationName { name: String },
     CreateClaim {
         longitudes: Vec<String>,
         latitudes: Vec<String>,
@@ -51,6 +52,7 @@ pub enum QueryMsg {
     GetClaim {
         id: u64,
     },
+    GetAllOrganizations { start_after: Option<Addr>, limit: Option<u32> },
     GetOrganization {
         address: Addr,
     },
@@ -113,3 +115,15 @@ pub struct ClaimsResponse {
 // pub struct OrganizationsResponse {
 //     pub organizations: Vec<OrganizationResponse>,
 // }
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct OrganizationsResponse {
+    pub organizations: Vec<OrganizationListItem>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct OrganizationListItem {
+    pub address: Addr,
+    pub name: String,
+    pub reputation_score: Uint128,
+}

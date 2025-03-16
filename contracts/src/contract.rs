@@ -3,7 +3,7 @@ use cosmwasm_std::entry_point;
 use cosmwasm_std::{to_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult, Uint128, Addr};
 use cw_storage_plus::Bound;
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg, ConfigResponse, ClaimResponse, OrganizationResponse, TotalCarbonCreditsResponse, ClaimsResponse};
+use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg, ConfigResponse, ClaimResponse, OrganizationResponse, TotalCarbonCreditsResponse, ClaimsResponse, OrganizationListItem,OrganizationsResponse};
 use crate::state::{Config, CONFIG, CLAIMS, VOTES, CLAIM_COUNTER, ORGANIZATIONS, Claim, ClaimStatus, OrganizationInfo, VoteOption};
 
 // Helper function to verify ZK proofs
@@ -56,6 +56,9 @@ pub fn execute(
         ExecuteMsg::VerifyEligibility { borrower, amount, proof } => {
             execute_verify_eligibility(deps, env, info, borrower, amount, proof)
         },
+        ExecuteMsg::UpdateOrganizationName { name } => {
+            execute_update_organization_name(deps, env, info, name)
+        }
     }
 }
 
@@ -173,6 +176,7 @@ pub fn execute_finalize_voting(
                 times_borrowed: 0,
                 total_borrowed: Uint128::zero(),
                 total_returned: Uint128::zero(),
+                name: "".to_string(),
             });
         
         org_info.carbon_credits += claim.demanded_tokens;
@@ -203,6 +207,7 @@ pub fn execute_finalize_voting(
                     times_borrowed: 0,
                     total_borrowed: Uint128::zero(),
                     total_returned: Uint128::zero(),
+                    name: "".to_string(),
                 });
             
             // Increase reputation score for correct voters
@@ -235,6 +240,7 @@ pub fn execute_lend_tokens(
             times_borrowed: 0,
             total_borrowed: Uint128::zero(),
             total_returned: Uint128::zero(),
+            name: "".to_string(),
         });
     
     let mut borrower_info = ORGANIZATIONS.may_load(deps.storage, &borrower)?
@@ -245,6 +251,7 @@ pub fn execute_lend_tokens(
             times_borrowed: 0,
             total_borrowed: Uint128::zero(),
             total_returned: Uint128::zero(),
+            name: "".to_string(),
         });
     
     // Check if lender has enough carbon credits
@@ -288,6 +295,7 @@ pub fn execute_repay_tokens(
             times_borrowed: 0,
             total_borrowed: Uint128::zero(),
             total_returned: Uint128::zero(),
+            name: "".to_string(),
         });
     
     let mut lender_info = ORGANIZATIONS.may_load(deps.storage, &lender)?
@@ -298,6 +306,7 @@ pub fn execute_repay_tokens(
             times_borrowed: 0,
             total_borrowed: Uint128::zero(),
             total_returned: Uint128::zero(),
+            name: "".to_string(),
         });
     
     // Check if borrower has enough carbon credits
@@ -345,6 +354,7 @@ pub fn execute_verify_eligibility(
             times_borrowed: 0,
             total_borrowed: Uint128::zero(),
             total_returned: Uint128::zero(),
+            name: "".to_string(),
         });
     
     // Verify the ZK proof
@@ -379,6 +389,7 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::GetClaims { start_after, limit } => to_binary(&query_claims(deps, start_after, limit)?),
         QueryMsg::GetClaimsByStatus { status, start_after, limit } => to_binary(&query_claims_by_status(deps, status, start_after, limit)?),
         // QueryMsg::GetAllOrganizations { start_after, limit } => to_binary(&query_all_organizations(deps, start_after, limit)?),
+        QueryMsg::GetAllOrganizations { start_after, limit } => to_binary(&query_all_organizations(deps, start_after, limit)?),
     }
 
 }
@@ -419,6 +430,7 @@ fn query_organization(deps: Deps, address: Addr) -> StdResult<OrganizationRespon
             times_borrowed: 0,
             total_borrowed: Uint128::zero(),
             total_returned: Uint128::zero(),
+            name: "".to_string(),
         });
     
     Ok(OrganizationResponse {
@@ -502,31 +514,57 @@ fn query_claims_by_status(deps: Deps, status: ClaimStatus, start_after: Option<u
     
     Ok(ClaimsResponse { claims })
 }
-
-// fn query_all_organizations(
-//     deps: Deps, 
-//     start_after: Option<String>, 
-//     limit: Option<u32>
-// ) -> StdResult<OrganizationsResponse> {
-//     let limit = limit.unwrap_or(30) as usize;
-//     let start = start_after.map(|s| Bound::exclusive(deps.api.addr_validate(&s)?));
+pub fn execute_update_organization_name(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    name: String,
+) -> Result<Response, ContractError> {
+    // Load organization info
+    let mut org_info = ORGANIZATIONS.may_load(deps.storage, &info.sender)?
+        .unwrap_or(OrganizationInfo {
+            reputation_score: Uint128::zero(),
+            carbon_credits: Uint128::zero(),
+            debt: Uint128::zero(),
+            times_borrowed: 0,
+            total_borrowed: Uint128::zero(),
+            total_returned: Uint128::zero(),
+            name: "".to_string(),
+        });
     
-//     let organizations: Vec<OrganizationResponse> = ORGANIZATIONS
-//         .range(deps.storage, start, None, cosmwasm_std::Order::Ascending)
-//         .take(limit)
-//         .map(|item| {
-//             let (address, org_info) = item?;
-//             Ok(OrganizationResponse {
-//                 address,
-//                 reputation_score: org_info.reputation_score,
-//                 carbon_credits: org_info.carbon_credits,
-//                 debt: org_info.debt,
-//                 times_borrowed: org_info.times_borrowed,
-//                 total_borrowed: org_info.total_borrowed,
-//                 total_returned: org_info.total_returned,
-//             })
-//         })
-//         .collect::<StdResult<Vec<_>>>()?;
+    // Update organization name
+    org_info.name = name.clone();
     
-//     Ok(OrganizationsResponse { organizations })
-// }
+    // Save updated organization info
+    ORGANIZATIONS.save(deps.storage, &info.sender, &org_info)?;
+    
+    Ok(Response::new()
+        .add_attribute("method", "update_organization_name")
+        .add_attribute("organization", info.sender)
+        .add_attribute("name", name))
+}
+fn query_all_organizations(deps: Deps, start_after: Option<Addr>, limit: Option<u32>) -> StdResult<OrganizationsResponse> {
+    let limit = limit.unwrap_or(30) as usize;
+    
+    // Create proper bounds for pagination
+    let start = match start_after {
+        Some(addr) => Some(Bound::ExclusiveRaw(addr.to_string().into())),
+        None => None,
+    };
+    
+    let organizations: Vec<OrganizationListItem> = ORGANIZATIONS
+        .range(deps.storage, start, None, cosmwasm_std::Order::Ascending)
+        .take(limit)
+        .map(|item| {
+            let (addr, org_info) = item?;
+            Ok(OrganizationListItem {
+                address: addr,
+                name: org_info.name,
+                reputation_score: org_info.reputation_score,
+            })
+        })
+        .collect::<StdResult<Vec<_>>>()?;
+    
+    Ok(OrganizationsResponse { organizations })
+    
+}
