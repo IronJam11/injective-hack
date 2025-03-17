@@ -22,6 +22,11 @@ pub enum ExecuteMsg {
         demanded_tokens: Uint128,
         ipfs_hashes: Vec<String>,
     },
+    CreateLendToken {
+        lender: Addr,
+        amount: Uint128,
+    },
+    
     CastVote {
         claim_id: u64,
         vote: VoteOption,
@@ -30,8 +35,8 @@ pub enum ExecuteMsg {
         claim_id: u64,
     },
     LendTokens {
-        borrower: Addr,
-        amount: Uint128,
+        lend_request_id: u64,
+        response: String,
     },
     RepayTokens {
         lender: Addr,
@@ -48,6 +53,11 @@ pub enum ExecuteMsg {
 #[serde(rename_all = "snake_case")]
 pub enum QueryMsg {
     GetConfig {},
+    UserLendRequests {
+        user: String,
+        start_after: Option<u64>,
+        limit: Option<u32>,
+    },
     GetClaim {
         id: u64,
     },

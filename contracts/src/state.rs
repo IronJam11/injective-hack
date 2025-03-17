@@ -31,6 +31,13 @@ pub enum ClaimStatus {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub enum LentStatus {
+    Active, 
+    Approved,
+    Rejected,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct Claim {
     pub id: u64,
     pub organization: Addr,
@@ -47,6 +54,19 @@ pub struct Claim {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct LendRequest {
+    pub id: u64,
+    pub borrower: Addr,
+    pub lender: Addr,
+    pub amount: Uint128,
+    pub eligibility_score: Uint128, 
+    pub proof_data: String, 
+    pub status: LentStatus,
+    pub time: u64,
+
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct OrganizationInfo {
     pub reputation_score: Uint128,
     pub carbon_credits: Uint128,
@@ -58,8 +78,28 @@ pub struct OrganizationInfo {
     pub emissions: Uint128,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct LendRequestResponse {
+    pub id: u64,
+    pub borrower: Addr,
+    pub lender: Addr,
+    pub status: LentStatus,
+    pub eligibility_score: Uint128,
+    pub proof_data: String,
+    pub time: u64,
+    pub amount: Uint128,
+    pub role: String,  // "borrower" or "lender"
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct UserLendRequestsResponse {
+    pub lend_requests: Vec<LendRequestResponse>,
+}
+
 pub const CONFIG: Item<Config> = Item::new("config");
 pub const CLAIMS: Map<u64, Claim> = Map::new("claims");
+pub const LEND_REQUESTS : Map<u64, LendRequest> = Map::new("lend_requests");
 pub const VOTES: Map<(u64, &Addr), VoteOption> = Map::new("votes");
 pub const CLAIM_COUNTER: Item<u64> = Item::new("claim_counter");
 pub const ORGANIZATIONS: Map<&Addr, OrganizationInfo> = Map::new("organizations");
+pub const LEND_REQUEST_COUNTER: Item<u64> = Item::new("lend_request_counter");

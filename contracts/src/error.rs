@@ -10,6 +10,15 @@ pub enum ContractError {
     #[error("Unauthorized")]
     Unauthorized {},
 
+    #[error("Unauthorized")]
+    InvalidResponse{},
+
+    #[error("RequestNotActive")]
+    RequestNotActive{},
+
+    #[error("Request not found")]
+    RequestNotFound {},
+
     #[error("Claim not found")]
     ClaimNotFound {},
 
