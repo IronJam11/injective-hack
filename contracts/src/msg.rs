@@ -37,18 +37,16 @@ pub enum ExecuteMsg {
         lender: Addr,
         amount: Uint128,
     },
-    // ZK verification will be called from here
     VerifyEligibility {
         borrower: Addr,
         amount: Uint128,
-        proof: String, // ZK proof
+        lender: Addr, // ZK proof
     },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum QueryMsg {
-    // GetAllOrganizations { start_after: Option<String>, limit: Option<u32> },
     GetConfig {},
     GetClaim {
         id: u64,
@@ -114,10 +112,6 @@ pub struct TotalCarbonCreditsResponse {
 pub struct ClaimsResponse {
     pub claims: Vec<ClaimResponse>,
 }
-// #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-// pub struct OrganizationsResponse {
-//     pub organizations: Vec<OrganizationResponse>,
-// }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct OrganizationsResponse {
@@ -129,4 +123,5 @@ pub struct OrganizationListItem {
     pub address: Addr,
     pub name: String,
     pub reputation_score: Uint128,
+    pub carbon_credits: Uint128,
 }

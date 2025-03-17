@@ -1,12 +1,17 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use std::str::FromStr;
-use cosmwasm_std::{to_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult, Uint128, Addr};
+use cosmwasm_std::{to_binary, Binary, Deps, DepsMut, Timestamp, Env, MessageInfo, Response, StdResult, Uint128, Addr};
 use cw_storage_plus::Bound;
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg, ConfigResponse, ClaimResponse, OrganizationResponse, TotalCarbonCreditsResponse, ClaimsResponse, OrganizationListItem,OrganizationsResponse};
 use crate::state::{Config, CONFIG, CLAIMS, VOTES, CLAIM_COUNTER, ORGANIZATIONS, Claim, ClaimStatus, OrganizationInfo, VoteOption};
-use crate::helpers::verify_zk_proof;
+use zero_knowledge_proofs::eligibility_proof;
+use std::convert::TryFrom;
+use cosmwasm_std::StdError;
+use cw_storage_plus::Map;
+use hex;
+
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
@@ -52,8 +57,8 @@ pub fn execute(
         ExecuteMsg::RepayTokens { lender, amount } => {
             execute_repay_tokens(deps, env, info, lender, amount)
         },
-        ExecuteMsg::VerifyEligibility { borrower, amount, proof } => {
-            execute_verify_eligibility(deps, env, info, borrower, amount, proof)
+        ExecuteMsg::VerifyEligibility { borrower, amount, lender} => {
+            execute_verify_eligibility(deps, env, info, borrower,lender,amount)
         },
         ExecuteMsg::UpdateOrganizationName { name } => {
             execute_update_organization_name(deps, env, info, name)
@@ -77,8 +82,6 @@ pub fn execute_create_claim(
 ) -> Result<Response, ContractError> {
     let mut claim_counter = CLAIM_COUNTER.load(deps.storage)?;
     let config = CONFIG.load(deps.storage)?;
-    
-    // Create a new claim
     let claim = Claim {
         id: claim_counter,
         organization: info.sender.clone(),
@@ -93,11 +96,7 @@ pub fn execute_create_claim(
         yes_votes: Uint128::zero(),
         no_votes: Uint128::zero(),
     };
-    
-    // Save the claim
     CLAIMS.save(deps.storage, claim_counter, &claim)?;
-    
-    // Increment the claim counter
     claim_counter += 1;
     CLAIM_COUNTER.save(deps.storage, &claim_counter)?;
     
@@ -115,29 +114,21 @@ pub fn execute_cast_vote(
     claim_id: u64,
     vote: VoteOption,
 ) -> Result<Response, ContractError> {
-    // Load the claim
     let mut claim = CLAIMS.load(deps.storage, claim_id)?;
     
-    // Check if voting period has ended
     if env.block.time.seconds() > claim.voting_end_time {
         return Err(ContractError::VotingEnded {});
     }
-    
-    // Check if voter has already voted
+
     if VOTES.has(deps.storage, (claim_id, &info.sender)) {
         return Err(ContractError::AlreadyVoted {});
     }
-    
-    // Record the vote
     VOTES.save(deps.storage, (claim_id, &info.sender), &vote)?;
-    
-    // Update the vote count
+
     match vote {
         VoteOption::Yes => claim.yes_votes += Uint128::new(1),
         VoteOption::No => claim.no_votes += Uint128::new(1),
     }
-    
-    // Save the updated claim
     CLAIMS.save(deps.storage, claim_id, &claim)?;
     
     Ok(Response::new()
@@ -152,21 +143,12 @@ pub fn execute_finalize_voting(
     _info: MessageInfo,
     claim_id: u64,
 ) -> Result<Response, ContractError> {
-    // Load the claim
     let mut claim = CLAIMS.load(deps.storage, claim_id)?;
-    
-    // Check if voting period has ended
     if env.block.time.seconds() <= claim.voting_end_time {
         return Err(ContractError::VotingNotEnded {});
     }
-    
-    // Determine the outcome
     let approved = claim.yes_votes >= claim.no_votes;
-    
-    // Update claim status
     claim.status = if approved { ClaimStatus::Approved } else { ClaimStatus::Rejected };
-    
-    // If approved, update organization's carbon credits
     let mut config = CONFIG.load(deps.storage)?;
     
     if approved {
@@ -188,8 +170,6 @@ pub fn execute_finalize_voting(
         config.total_carbon_credits += claim.demanded_tokens;
         CONFIG.save(deps.storage, &config)?;
     }
-    
-    // Update voters' reputation
     let voters: Vec<(u64, Addr)> = VOTES
         .prefix(claim_id)
         .keys(deps.storage, None, None, cosmwasm_std::Order::Ascending)
@@ -212,8 +192,6 @@ pub fn execute_finalize_voting(
                     name: "".to_string(),
                     emissions: Uint128::zero(),
                 });
-            
-            // Increase reputation score for correct voters
             org_info.reputation_score += Uint128::new(1);
             ORGANIZATIONS.save(deps.storage, &voter_addr, &org_info)?;
         }
@@ -256,21 +234,16 @@ pub fn execute_lend_tokens(
             emissions: Uint128::zero(),
         });
     
-    // Check if lender has enough carbon credits
     if lender_info.carbon_credits < amount {
         return Err(ContractError::NotEnoughCredits {});
     }
     
-    // Update lender's carbon credits
     lender_info.carbon_credits -= amount;
-    
-    // Update borrower's carbon credits and debt
     borrower_info.carbon_credits += amount;
     borrower_info.debt += amount;
     borrower_info.times_borrowed += 1;
     borrower_info.total_borrowed += amount;
-    
-    // Save updated organization info
+
     ORGANIZATIONS.save(deps.storage, &info.sender, &lender_info)?;
     ORGANIZATIONS.save(deps.storage, &borrower, &borrower_info)?;
     
@@ -288,7 +261,6 @@ pub fn execute_repay_tokens(
     lender: Addr,
     amount: Uint128,
 ) -> Result<Response, ContractError> {
-    // Load organization info
     let mut borrower_info = ORGANIZATIONS.may_load(deps.storage, &info.sender)?
         .unwrap_or(OrganizationInfo {
             reputation_score: Uint128::zero(),
@@ -320,16 +292,11 @@ pub fn execute_repay_tokens(
     if borrower_info.debt < amount {
         return Err(ContractError::NotEnoughCredits {});
     }
-    
-    // Update borrower's carbon credits and debt
+
     borrower_info.carbon_credits -= amount;
     borrower_info.debt -= amount;
     borrower_info.total_returned += amount;
-    
-    // Update lender's carbon credits
     lender_info.carbon_credits += amount;
-    
-    // Save updated organization info
     ORGANIZATIONS.save(deps.storage, &info.sender, &borrower_info)?;
     ORGANIZATIONS.save(deps.storage, &lender, &lender_info)?;
     
@@ -345,8 +312,8 @@ pub fn execute_verify_eligibility(
     _env: Env,
     _info: MessageInfo,
     borrower: Addr,
+    lender: Addr,
     amount: Uint128,
-    proof: String,
 ) -> Result<Response, ContractError> {
     let borrower_info = ORGANIZATIONS.may_load(deps.storage, &borrower)?
         .unwrap_or(OrganizationInfo {
@@ -359,38 +326,75 @@ pub fn execute_verify_eligibility(
             name: "".to_string(),
             emissions: Uint128::zero(),
         });
+    let lender_info = ORGANIZATIONS.may_load(deps.storage, &lender)?
+        .unwrap_or(OrganizationInfo {
+            reputation_score: Uint128::zero(),
+            carbon_credits: Uint128::zero(),
+            debt: Uint128::zero(),
+            times_borrowed: 0,
+            total_borrowed: Uint128::zero(),
+            total_returned: Uint128::zero(),
+            name: "".to_string(),
+            emissions: Uint128::zero(),
+        });
+    let borrower_emissions = u32::try_from(borrower_info.emissions.u128())
+        .map_err(|_| ContractError::Std(StdError::generic_err("Conversion error for emissions")))?;
+    let borrower_returned = u32::try_from(borrower_info.total_returned.u128())
+        .map_err(|_| ContractError::Std(StdError::generic_err("Conversion error for total_returned")))?;
+    let borrower_total_borrowed = u32::try_from(borrower_info.total_borrowed.u128())
+        .map_err(|_| ContractError::Std(StdError::generic_err("Conversion error for total_borrowed")))?;
+    let borrower_debt = u32::try_from(borrower_info.debt.u128())
+        .map_err(|_| ContractError::Std(StdError::generic_err("Conversion error for debt")))?;
+    let borrower_credits = u32::try_from(borrower_info.carbon_credits.u128())
+        .map_err(|_| ContractError::Std(StdError::generic_err("Conversion error for carbon_credits")))?;
+    let borrower_reputation = u32::try_from(borrower_info.reputation_score.u128())
+        .map_err(|_| ContractError::Std(StdError::generic_err("Conversion error for reputation_score")))?;
+    let lender_credits = u32::try_from(lender_info.carbon_credits.u128())
+        .map_err(|_| ContractError::Std(StdError::generic_err("Conversion error for lender carbon_credits")))?;
+    let lender_debt = u32::try_from(lender_info.debt.u128())
+        .map_err(|_| ContractError::Std(StdError::generic_err("Conversion error for lender debt")))?;
     
-    // Verify the ZK proof
-    let is_eligible = verify_zk_proof(
-        &borrower_info.reputation_score,
-        &borrower_info.debt,
-        &borrower_info.times_borrowed,
-        &borrower_info.total_borrowed,
-        &borrower_info.total_returned,
-        &amount,
-        &proof,
-    )?;
+    // Call the eligibility_proof function to get score and proof
+    let (eligibility_score, proof_data) = eligibility_proof(
+        borrower_emissions,
+        borrower_returned,
+        borrower_total_borrowed,
+        borrower_debt,
+        borrower_credits,
+        borrower_reputation,
+        lender_credits,
+        lender_debt,
+    );
     
-    if !is_eligible {
+    if eligibility_score <= 0 {
         return Err(ContractError::BorrowerNotEligible {});
     }
     
+    let proof_hex = hex::encode(&proof_data);
+    
+    PROOFS.save(deps.storage, (&borrower, &lender), &proof_data)?;
+
     Ok(Response::new()
         .add_attribute("method", "verify_eligibility")
         .add_attribute("borrower", borrower)
+        .add_attribute("lender", lender)
         .add_attribute("amount", amount)
-        .add_attribute("is_eligible", "true"))
+        .add_attribute("eligibility_score", eligibility_score.to_string())
+        .add_attribute("proof_hex", proof_hex))
 }
+
+
+pub const PROOFS: Map<(&Addr, &Addr), Vec<u8>> = Map::new("proofs");
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::GetConfig {} => to_binary(&query_config(deps)?),
-        QueryMsg::GetClaim { id } => to_binary(&query_claim(deps, id)?),
+        QueryMsg::GetClaim { id } => to_binary(&query_claim(deps,_env,id)?),
         QueryMsg::GetOrganization { address } => to_binary(&query_organization(deps, address)?),
         QueryMsg::GetTotalCarbonCredits {} => to_binary(&query_total_carbon_credits(deps)?),
-        QueryMsg::GetClaims { start_after, limit } => to_binary(&query_claims(deps, start_after, limit)?),
-        QueryMsg::GetClaimsByStatus { status, start_after, limit } => to_binary(&query_claims_by_status(deps, status, start_after, limit)?),
+        QueryMsg::GetClaims { start_after, limit } => to_binary(&query_claims(deps,_env,start_after, limit)?),
+        QueryMsg::GetClaimsByStatus { status, start_after, limit } => to_binary(&query_claims_by_status(deps, _env,status, start_after, limit)?),
         QueryMsg::GetAllOrganizations { start_after, limit } => to_binary(&query_all_organizations(deps, start_after, limit)?),
     }
 
@@ -405,8 +409,19 @@ fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
     })
 }
 
-fn query_claim(deps: Deps, id: u64) -> StdResult<ClaimResponse> {
+fn query_claim(deps: Deps, env: Env, id: u64) -> StdResult<ClaimResponse> {
     let claim = CLAIMS.load(deps.storage, id)?;
+    
+    // Convert u64 to Timestamp for comparison
+    let voting_end_timestamp = Timestamp::from_seconds(claim.voting_end_time);
+    
+    // Check if voting has ended using env.block.time
+    let (yes_votes, no_votes) = if env.block.time >= voting_end_timestamp {
+        (claim.yes_votes, claim.no_votes)
+    } else {
+        (Uint128::zero(), Uint128::zero())
+    };
+    
     Ok(ClaimResponse {
         id: claim.id,
         organization: claim.organization,
@@ -418,8 +433,8 @@ fn query_claim(deps: Deps, id: u64) -> StdResult<ClaimResponse> {
         ipfs_hashes: claim.ipfs_hashes,
         status: claim.status,
         voting_end_time: claim.voting_end_time,
-        yes_votes: claim.yes_votes,
-        no_votes: claim.no_votes,
+        yes_votes,
+        no_votes,
     })
 }
 
@@ -456,7 +471,7 @@ fn query_total_carbon_credits(deps: Deps) -> StdResult<TotalCarbonCreditsRespons
     })
 }
 
-fn query_claims(deps: Deps, start_after: Option<u64>, limit: Option<u32>) -> StdResult<ClaimsResponse> {
+fn query_claims(deps: Deps, env: Env, start_after: Option<u64>, limit: Option<u32>) -> StdResult<ClaimsResponse> {
     let limit = limit.unwrap_or(30) as usize;
     let start = start_after.map(|s| Bound::exclusive(s));
     
@@ -465,6 +480,17 @@ fn query_claims(deps: Deps, start_after: Option<u64>, limit: Option<u32>) -> Std
         .take(limit)
         .map(|item| {
             let (_, claim) = item?;
+            
+            // Convert u64 to Timestamp for comparison
+            let voting_end_timestamp = Timestamp::from_seconds(claim.voting_end_time);
+            
+            // Check if voting has ended using env.block.time
+            let (yes_votes, no_votes) = if env.block.time >= voting_end_timestamp {
+                (claim.yes_votes, claim.no_votes)
+            } else {
+                (Uint128::zero(), Uint128::zero())
+            };
+            
             Ok(ClaimResponse {
                 id: claim.id,
                 organization: claim.organization,
@@ -476,8 +502,8 @@ fn query_claims(deps: Deps, start_after: Option<u64>, limit: Option<u32>) -> Std
                 ipfs_hashes: claim.ipfs_hashes,
                 status: claim.status,
                 voting_end_time: claim.voting_end_time,
-                yes_votes: claim.yes_votes,
-                no_votes: claim.no_votes,
+                yes_votes,
+                no_votes,
             })
         })
         .collect::<StdResult<Vec<_>>>()?;
@@ -485,7 +511,7 @@ fn query_claims(deps: Deps, start_after: Option<u64>, limit: Option<u32>) -> Std
     Ok(ClaimsResponse { claims })
 }
 
-fn query_claims_by_status(deps: Deps, status: ClaimStatus, start_after: Option<u64>, limit: Option<u32>) -> StdResult<ClaimsResponse> {
+fn query_claims_by_status(deps: Deps, env: Env, status: ClaimStatus, start_after: Option<u64>, limit: Option<u32>) -> StdResult<ClaimsResponse> {
     let limit = limit.unwrap_or(30) as usize;
     let start = start_after.map(|s| Bound::exclusive(s));
     
@@ -500,6 +526,17 @@ fn query_claims_by_status(deps: Deps, status: ClaimStatus, start_after: Option<u
         .take(limit)
         .map(|item| {
             let (_, claim) = item?;
+            
+            // Convert u64 to Timestamp for comparison
+            let voting_end_timestamp = Timestamp::from_seconds(claim.voting_end_time);
+            
+            // Check if voting has ended using env.block.time
+            let (yes_votes, no_votes) = if env.block.time >= voting_end_timestamp {
+                (claim.yes_votes, claim.no_votes)
+            } else {
+                (Uint128::zero(), Uint128::zero())
+            };
+            
             Ok(ClaimResponse {
                 id: claim.id,
                 organization: claim.organization,
@@ -511,8 +548,8 @@ fn query_claims_by_status(deps: Deps, status: ClaimStatus, start_after: Option<u
                 ipfs_hashes: claim.ipfs_hashes,
                 status: claim.status,
                 voting_end_time: claim.voting_end_time,
-                yes_votes: claim.yes_votes,
-                no_votes: claim.no_votes,
+                yes_votes,
+                no_votes,
             })
         })
         .collect::<StdResult<Vec<_>>>()?;
@@ -552,7 +589,6 @@ pub fn execute_update_organization_name(
 fn query_all_organizations(deps: Deps, start_after: Option<Addr>, limit: Option<u32>) -> StdResult<OrganizationsResponse> {
     let limit = limit.unwrap_or(30) as usize;
     
-    // Create proper bounds for pagination
     let start = match start_after {
         Some(addr) => Some(Bound::ExclusiveRaw(addr.to_string().into())),
         None => None,
@@ -567,6 +603,7 @@ fn query_all_organizations(deps: Deps, start_after: Option<Addr>, limit: Option<
                 address: addr,
                 name: org_info.name,
                 reputation_score: org_info.reputation_score,
+                carbon_credits: org_info.carbon_credits
             })
         })
         .collect::<StdResult<Vec<_>>>()?;
@@ -580,7 +617,6 @@ pub fn add_organization_emission(
     info: MessageInfo,
     emissions: String,
 ) -> Result<Response, ContractError> {
-    // Load organization info
     let mut org_info = ORGANIZATIONS.may_load(deps.storage, &info.sender)?
         .unwrap_or(OrganizationInfo {
             reputation_score: Uint128::zero(),
@@ -592,15 +628,8 @@ pub fn add_organization_emission(
             name: "".to_string(),
             emissions: Uint128::zero(),
         });
-
-    // Parse the new emissions value
     let new_emissions = Uint128::from_str(&emissions)?;
-
-    // Add the new emissions to the existing emissions
-    // This will now work because we've implemented From<OverflowError> for ContractError
     org_info.emissions = org_info.emissions.checked_add(new_emissions)?;
-
-    // Save updated organization info
     ORGANIZATIONS.save(deps.storage, &info.sender, &org_info)?;
 
     Ok(Response::new()
