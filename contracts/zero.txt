@@ -1,0 +1,238 @@
+fn eligibility_proof(
+    org1_net_emissions: FieldElement,
+    org1_total_credits_returned: FieldElement,
+    org1_total_borrowed: FieldElement,
+    org1_debt: FieldElement,
+    org1_carbon_credits: FieldElement,
+    org1_reputation: FieldElement,
+    org2_carbon_credits: FieldElement,
+    org2_debt: FieldElement,
+) -> FieldElement {
+    let mut circuit = Circuit::new();
+
+    // Add organization parameters as inputs
+    let net_emissions_idx = circuit.add_input(org1_net_emissions.clone());
+    let credits_returned_idx = circuit.add_input(org1_total_credits_returned.clone());
+    let borrowed_idx = circuit.add_input(org1_total_borrowed.clone());
+    let debt1_idx = circuit.add_input(org1_debt.clone());
+    let carbon1_idx = circuit.add_input(org1_carbon_credits.clone());
+    let reputation_idx = circuit.add_input(org1_reputation.clone());
+    let carbon2_idx = circuit.add_input(org2_carbon_credits.clone());
+    let debt2_idx = circuit.add_input(org2_debt.clone());
+
+    // Add constants
+    let two = circuit.add_input(FieldElement::new(2.to_bigint().unwrap()));
+    let hundred = circuit.add_input(FieldElement::new(100.to_bigint().unwrap()));
+    let fifty = circuit.add_input(FieldElement::new(50.to_bigint().unwrap()));
+    let neg_one = circuit.add_input(FieldElement::new((-1).to_bigint().unwrap()));
+
+    // Compute sum of carbon credits
+    let sum_cc_idx = circuit.add_input(org1_carbon_credits.clone() + org2_carbon_credits.clone());
+    circuit.add_gate(circuit::Gate::Add(carbon1_idx, carbon2_idx, sum_cc_idx));
+
+    // Compute term_a = reputation * sum_cc
+    let term_a_idx = circuit.add_input(org1_reputation.clone() * (org1_carbon_credits.clone() + org2_carbon_credits.clone()));
+    circuit.add_gate(circuit::Gate::Mul(reputation_idx, sum_cc_idx, term_a_idx));
+
+    // Compute term_b = debt1 + debt2
+    let term_b_idx = circuit.add_input(org1_debt.clone() + org2_debt.clone());
+    circuit.add_gate(circuit::Gate::Add(debt1_idx, debt2_idx, term_b_idx));
+
+    // Compute term_c = net_emissions * 2
+    let term_c_idx = circuit.add_input(org1_net_emissions.clone() * FieldElement::new(2.to_bigint().unwrap()));
+    circuit.add_gate(circuit::Gate::Mul(net_emissions_idx, two, term_c_idx));
+
+    // Compute term_d components: credits_returned*100 - borrowed*50
+    let term_d_part1_idx = circuit.add_input(org1_total_credits_returned.clone() * FieldElement::new(100.to_bigint().unwrap()));
+    circuit.add_gate(circuit::Gate::Mul(credits_returned_idx, hundred, term_d_part1_idx));
+
+    let term_d_part2_idx = circuit.add_input(org1_total_borrowed.clone() * FieldElement::new(50.to_bigint().unwrap()));
+    circuit.add_gate(circuit::Gate::Mul(borrowed_idx, fifty, term_d_part2_idx));
+
+    let term_d_part2_neg_idx = circuit.add_input(FieldElement::new(0.to_bigint().unwrap()) - term_d_part2_idx);
+    circuit.add_gate(circuit::Gate::Mul(term_d_part2_idx, neg_one, term_d_part2_neg_idx));
+
+    let term_d_idx = circuit.add_input(term_d_part1_idx + term_d_part2_neg_idx);
+    circuit.add_gate(circuit::Gate::Add(term_d_part1_idx, term_d_part2_neg_idx, term_d_idx));
+
+    // Combine all terms
+    let term_b_neg_idx = circuit.add_input(FieldElement::new(0.to_bigint().unwrap()) - term_b_idx);
+    circuit.add_gate(circuit::Gate::Mul(term_b_idx, neg_one, term_b_neg_idx));
+
+    let temp1_idx = circuit.add_input(term_a_idx + term_b_neg_idx);
+    circuit.add_gate(circuit::Gate::Add(term_a_idx, term_b_neg_idx, temp1_idx));
+
+    let term_c_neg_idx = circuit.add_input(FieldElement::new(0.to_bigint().unwrap()) - term_c_idx);
+    circuit.add_gate(circuit::Gate::Mul(term_c_idx, neg_one, term_c_neg_idx));
+
+    let temp2_idx = circuit.add_input(temp1_idx + term_c_neg_idx);
+    circuit.add_gate(circuit::Gate::Add(temp1_idx, term_c_neg_idx, temp2_idx));
+
+    let score_idx = circuit.add_input(temp2_idx + term_d_idx);
+    circuit.add_gate(circuit::Gate::Add(temp2_idx, term_d_idx, score_idx));
+
+    // Set and verify output
+    let score = circuit.get_input(score_idx).unwrap().clone();
+    circuit.set_output(score.clone());
+
+    println!("Generating Eligibility Proof...");
+    circuit.generate_proof("eligibility_proof.bin");
+    let is_valid = circuit.verify_proof("eligibility_proof.bin");
+    println!("Eligibility Proof Valid: {}", is_valid);
+
+    score
+}
+
+
+
+----------------------
+
+use num_bigint::{ToBigInt};
+ use circuit::Circuit;
+ use crate::field::FieldElement;
+
+A FieldElement representing the eligibility score
+fn eligibility_proof(
+//     org1_net_emissions: FieldElement,
+//     org1_total_credits_returned: FieldElement,
+//     org1_total_borrowed: FieldElement,
+//     org1_debt: FieldElement,
+//     org1_carbon_credits: FieldElement,
+//     org1_reputation: FieldElement,
+//     org2_carbon_credits: FieldElement,
+//     org2_debt: FieldElement,
+// ) -> FieldElement {
+//     let mut circuit = Circuit::new();
+    
+//     // Add all inputs to the circuit
+//     let net_emissions_idx = circuit.add_input(org1_net_emissions.clone());
+//     let total_credits_returned_idx = circuit.add_input(org1_total_credits_returned.clone());
+//     let total_borrowed_idx = circuit.add_input(org1_total_borrowed.clone());
+//     let debt_idx = circuit.add_input(org1_debt.clone());
+//     let carbon_credits_idx = circuit.add_input(org1_carbon_credits.clone());
+//     let reputation_idx = circuit.add_input(org1_reputation.clone());
+//     let org2_carbon_credits_idx = circuit.add_input(org2_carbon_credits.clone());
+//     let org2_debt_idx = circuit.add_input(org2_debt.clone());
+    
+//     // Calculate repayment ratio (total_credits_returned / total_borrowed)
+//     // We need to ensure total_borrowed isn't zero to avoid division by zero
+//     let repayment_ratio = if org1_total_borrowed.get_value() > 0.to_bigint().unwrap() {
+//         &org1_total_credits_returned.get_value() * 100.to_bigint().unwrap() / &org1_total_borrowed.get_value()
+//     } else {
+//         100.to_bigint().unwrap() // Perfect score if nothing borrowed
+//     };
+//     // Clone the value before moving it
+//     let repayment_ratio_el = FieldElement::new(repayment_ratio.clone());
+//     let repayment_ratio_idx = circuit.add_input(repayment_ratio_el.clone());
+    
+//     // Calculate debt-to-credit ratio (debt / carbon_credits) * 100
+//     // Lower is better, so we'll invert it later for the score
+//     let debt_ratio = if org1_carbon_credits.get_value() > 0.to_bigint().unwrap() {
+//         &org1_debt.get_value() * 100.to_bigint().unwrap() / &org1_carbon_credits.get_value()
+//     } else {
+//         100.to_bigint().unwrap() // Maximum (worst) if no credits
+//     };
+//     // Clone the value before moving it
+//     let debt_ratio_el = FieldElement::new(debt_ratio.clone());
+//     let debt_ratio_idx = circuit.add_input(debt_ratio_el.clone());
+    
+//     // Calculate credit availability ratio (org1_carbon_credits / org1_net_emissions)
+//     // Higher is better - means they have more credits relative to their emissions
+//     let credit_availability = if org1_net_emissions.get_value() > 0.to_bigint().unwrap() {
+//         &org1_carbon_credits.get_value() * 100.to_bigint().unwrap() / &org1_net_emissions.get_value()
+//     } else {
+//         200.to_bigint().unwrap() // High score if no emissions
+//     };
+//     // Clone the value before moving it
+//     let credit_availability_el = FieldElement::new(credit_availability.clone());
+//     let credit_availability_idx = circuit.add_input(credit_availability_el.clone());
+    
+//     // Calculate compatibility between organizations (ratio of credits to debt)
+//     let compatibility = if org2_debt.get_value() > 0.to_bigint().unwrap() {
+//         &org2_carbon_credits.get_value() * 100.to_bigint().unwrap() / &org2_debt.get_value()
+//     } else {
+//         200.to_bigint().unwrap() // High score if no debt
+//     };
+//     // Clone the value before moving it
+//     let compatibility_el = FieldElement::new(compatibility.clone());
+//     let compatibility_idx = circuit.add_input(compatibility_el.clone());
+    
+//     // Calculate final score components with weights
+//     // 1. Repayment history (25%)
+//     let repayment_weight = 25.to_bigint().unwrap();
+//     let repayment_component = FieldElement::new(&repayment_ratio * &repayment_weight / 100.to_bigint().unwrap());
+//     let repayment_component_idx = circuit.add_input(repayment_component.clone());
+    
+//     // 2. Debt ratio inverted (100 - debt_ratio) (25%)
+//     let inverted_debt_ratio = 100.to_bigint().unwrap() - debt_ratio;
+//     let inverted_debt_ratio_el = FieldElement::new(inverted_debt_ratio.clone());
+//     let debt_weight = 25.to_bigint().unwrap();
+//     let debt_component = FieldElement::new(&inverted_debt_ratio * &debt_weight / 100.to_bigint().unwrap());
+//     let debt_component_idx = circuit.add_input(debt_component.clone());
+    
+//     // 3. Reputation (20%)
+//     let capped_reputation_val = if org1_reputation.get_value() > 100.to_bigint().unwrap() {
+//         100.to_bigint().unwrap()
+//     } else {
+//         org1_reputation.get_value().clone()
+//     };
+//     let capped_reputation = FieldElement::new(capped_reputation_val.clone());
+//     let reputation_weight = 20.to_bigint().unwrap();
+//     let reputation_component = FieldElement::new(&capped_reputation_val * &reputation_weight / 100.to_bigint().unwrap());
+//     let reputation_component_idx = circuit.add_input(reputation_component.clone());
+    
+//     // 4. Credit availability (15%)
+//     let capped_availability_val = if credit_availability > 200.to_bigint().unwrap() {
+//         200.to_bigint().unwrap()
+//     } else {
+//         credit_availability.clone()
+//     };
+//     let capped_availability = FieldElement::new(capped_availability_val.clone());
+//     let availability_weight = 15.to_bigint().unwrap();
+//     let availability_component = FieldElement::new(&capped_availability_val * &availability_weight / 200.to_bigint().unwrap());
+//     let availability_component_idx = circuit.add_input(availability_component.clone());
+    
+//     // 5. Compatibility with org2 (15%)
+//     let capped_compatibility_val = if compatibility > 200.to_bigint().unwrap() {
+//         200.to_bigint().unwrap()
+//     } else {
+//         compatibility.clone()
+//     };
+//     let capped_compatibility = FieldElement::new(capped_compatibility_val.clone());
+//     let compatibility_weight = 15.to_bigint().unwrap();
+//     let compatibility_component = FieldElement::new(&capped_compatibility_val * &compatibility_weight / 200.to_bigint().unwrap());
+//     let compatibility_component_idx = circuit.add_input(compatibility_component.clone());
+    
+//     // Add gates to verify our calculations
+//     // These are simplified versions just to represent the calculations within the circuit
+//     // In a real implementation, you'd need to break down each operation into primitive gates
+    
+//     // Sum up components
+//     let temp_sum1 = repayment_component.clone() + debt_component.clone();
+//     let temp_sum1_idx = circuit.add_input(temp_sum1.clone());
+//     circuit.add_gate(circuit::Gate::Add(repayment_component_idx, debt_component_idx, temp_sum1_idx));
+    
+//     let temp_sum2 = temp_sum1.clone() + reputation_component.clone();
+//     let temp_sum2_idx = circuit.add_input(temp_sum2.clone());
+//     circuit.add_gate(circuit::Gate::Add(temp_sum1_idx, reputation_component_idx, temp_sum2_idx));
+    
+//     let temp_sum3 = temp_sum2.clone() + availability_component.clone();
+//     let temp_sum3_idx = circuit.add_input(temp_sum3.clone());
+//     circuit.add_gate(circuit::Gate::Add(temp_sum2_idx, availability_component_idx, temp_sum3_idx));
+    
+//     let final_score = temp_sum3.clone() + compatibility_component.clone();
+//     let final_score_idx = circuit.add_input(final_score.clone());
+//     circuit.add_gate(circuit::Gate::Add(temp_sum3_idx, compatibility_component_idx, final_score_idx));
+    
+//     // Set the output of the circuit to be the final score
+//     circuit.set_output(final_score.clone());
+    
+//     // Generate and verify proof
+//     println!("Generating Eligibility Proof...");
+//     circuit.generate_proof("eligibility_proof.bin");
+//     let is_valid = circuit.verify_proof("eligibility_proof.bin");
+//     println!("Eligibility Proof is valid: {}", is_valid);
+    
+//     // Return the final score
+//     final_score
+// }

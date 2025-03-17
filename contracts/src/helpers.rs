@@ -1,4 +1,5 @@
 use cosmwasm_std::{StdError, StdResult, Uint128};
+use zero_knowledge_proofs::eligibility_proof;
 
 // This function simulates ZK proof verification
 // In a real implementation, you would integrate with your ZK verification system
@@ -25,3 +26,5 @@ pub fn verify_zk_proof(
         Ok(false)
     }
 }
+
+

@@ -185,7 +185,6 @@ pub fn execute_finalize_voting(
         org_info.carbon_credits += claim.demanded_tokens;
         ORGANIZATIONS.save(deps.storage, &claim.organization, &org_info)?;
         
-        // Update total carbon credits
         config.total_carbon_credits += claim.demanded_tokens;
         CONFIG.save(deps.storage, &config)?;
     }
@@ -219,8 +218,6 @@ pub fn execute_finalize_voting(
             ORGANIZATIONS.save(deps.storage, &voter_addr, &org_info)?;
         }
     }
-    
-    // Save the updated claim
     CLAIMS.save(deps.storage, claim_id, &claim)?;
     
     Ok(Response::new()
@@ -235,7 +232,6 @@ pub fn execute_lend_tokens(
     borrower: Addr,
     amount: Uint128,
 ) -> Result<Response, ContractError> {
-    // Load organization info
     let mut lender_info = ORGANIZATIONS.may_load(deps.storage, &info.sender)?
         .unwrap_or(OrganizationInfo {
             reputation_score: Uint128::zero(),
@@ -317,12 +313,10 @@ pub fn execute_repay_tokens(
             emissions: Uint128::zero(),
         });
     
-    // Check if borrower has enough carbon credits
+
     if borrower_info.carbon_credits < amount {
         return Err(ContractError::NotEnoughCredits {});
     }
-    
-    // Check if borrower has enough debt to repay
     if borrower_info.debt < amount {
         return Err(ContractError::NotEnoughCredits {});
     }
