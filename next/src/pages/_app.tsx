@@ -1,5 +1,5 @@
 import Layout from "@/components/Layout";
-import ContextProvider from "@/context/ContextProvider";
+
 import CounterContextProvider from "@/context/CounterContextProvider";
 import WalletContextProvider from "@/context/WalletContextProvider";
 import "@/styles/globals.css";
